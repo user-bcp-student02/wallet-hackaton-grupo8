@@ -108,6 +108,15 @@ npm start
 La API se inicia en `http://localhost:8080` y Angular en `http://localhost:4200`.
 Revisa los comandos adicionales del informe de pruebas y registra sus resultados reales.
 
+### Proyectos de prueba automatizados
+
+Al aprobar el paso de QA, `crew/test_projects.py` detecta los proyectos en `output/` y crea,
+sin sobrescribir archivos existentes, `<backend>/test_backend` (Karate DSL, según
+`.github/agents/automation-backend.agent.md`) y `<frontend>/test_frontend` (Playwright, según
+`.github/agents/automation-frontend.agent.md`). Para ejecutarlos automáticamente define
+`CREWAI_RUN_TESTS=true`; Karate 1.4.1 requiere JDK 17–21 (usa `KARATE_JAVA_HOME` si tu JDK por defecto es mayor).
+Manualmente: `mvn test` en `test_backend` y `npm install && npx playwright install chromium && npx playwright test` en `test_frontend`.
+
 ## Verificar cambios en los agentes
 
 ```sh
