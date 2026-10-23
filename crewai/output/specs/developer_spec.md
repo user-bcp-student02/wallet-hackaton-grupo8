@@ -1,6 +1,6 @@
 # Developer spec · onboarding W1
 
-> **EJECUCIÓN REAL.** Resumen manual de la implementación existente para mantener la estructura esperada por CrewAI. El agente Developer no se ejecutó; no hubo modelo ni MCP.
+> **REVISIÓN LOCAL REAL; NO EJECUTADA POR CREWAI.** Resumen manual de la implementación existente. El agente Developer no se ejecutó; no hubo modelo ni MCP.
 
 ## Estado de entrega
 

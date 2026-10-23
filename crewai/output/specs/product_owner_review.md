@@ -1,6 +1,6 @@
 # Product Owner review · onboarding W1
 
-> **EJECUCIÓN REAL.** Evaluación de escritorio basada en OpenSpec, código y pruebas disponibles. No fue generada por el agente Product Owner ni aprobada por una persona mediante CrewAI.
+> **REVISIÓN LOCAL REAL; NO GENERADA POR CREWAI.** Evaluación de escritorio basada en OpenSpec, código y pruebas disponibles. No fue aprobada por una persona mediante CrewAI.
 
 ## Alcance
 

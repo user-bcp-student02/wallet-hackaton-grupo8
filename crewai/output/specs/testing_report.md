@@ -1,6 +1,6 @@
 # Testing report · onboarding W1
 
-> **EJECUCIÓN REAL.** Los resultados siguientes se tomaron de ejecuciones reales del proyecto; este informe no fue producido por el agente Testing de CrewAI ni por una llamada LLM/MCP.
+> **RESULTADOS DE PRUEBAS REALES; INFORME NO GENERADO POR CREWAI.** Los resultados siguientes se tomaron de ejecuciones reales del proyecto; no hubo llamada LLM/MCP.
 
 ## Ejecuciones realizadas
 
