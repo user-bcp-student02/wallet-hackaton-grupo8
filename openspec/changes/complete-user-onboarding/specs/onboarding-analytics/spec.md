@@ -1,3 +1,7 @@
+---
+Status: approved
+---
+
 # Capability: Analítica de onboarding
 
 ## ADDED Requirements

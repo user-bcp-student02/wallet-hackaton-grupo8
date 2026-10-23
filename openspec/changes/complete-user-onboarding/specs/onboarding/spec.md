@@ -1,3 +1,8 @@
+---
+Status: approved
+---
+
+
 # Capability: Onboarding de usuario
 
 ## ADDED Requirements
