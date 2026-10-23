@@ -61,6 +61,7 @@ from pathlib import Path
 from crewai import Crew, Process
 
 from crew.workflow import build_tasks, workflow_steps
+from crew.test_projects import detect_projects, prepare_test_projects, run_test_projects, summarize
 
 # ── MCP clients ────────────────────────────────────────────────────
 from mcp_projects import (
@@ -464,6 +465,15 @@ def save_checkpoint(data: dict) -> None:
 
 
 # ── Output helpers ─────────────────────────────────────────────────
+
+def build_test_projects() -> None:
+    """Crea test_backend/test_frontend en los proyectos generados; los ejecuta si CREWAI_RUN_TESTS=true."""
+    prepared = prepare_test_projects(OUTPUT_DIR)
+    print("\n🧪 Proyectos de prueba:\n" + summarize(prepared))
+    if os.getenv("CREWAI_RUN_TESTS", "false").strip().lower() == "true":
+        for result in run_test_projects(prepared):
+            print(f"  [{result['status']}] {result['suite']}\n{result['detail']}")
+
 
 def extract_and_save_code(text) -> list[str]:
     """Extrae bloques de código del output del LLM y los guarda en sus carpetas correspondientes."""
@@ -1024,6 +1034,8 @@ def main():
                 saved_out = steps_state[step_key].get("output", "")
                 if saved_out:
                     extract_and_save_code(saved_out)
+            if step_key == "testing":
+                build_test_projects()
             continue
 
         print(f"\n{'─'*60}")
@@ -1038,7 +1050,11 @@ def main():
             task = task_map[step_key]
 
             task.description += project_docs_context
-
+            if step_key == "testing":
+                found = detect_projects(OUTPUT_DIR)
+                names = [f"backend: {p.name}" for p in found["backend"]] + [f"frontend: {p.name}" for p in found["frontend"]]
+                task.description += ("\nProyectos identificados en output/ (se crean test_backend y test_frontend en cada uno): "
+                                     + (", ".join(names) or "ninguno") + "\n")
             # Inyectar contexto de pasos anteriores en la descripción
             ctx_note = build_context_note(approved_outputs)
             if ctx_note:
@@ -1064,6 +1080,8 @@ def main():
                 save_spec(spec_file, output)
                 if do_code:
                     extract_and_save_code(output)
+                if step_key == "testing":
+                    build_test_projects()
                 approved_outputs[step_key] = output
                 steps_state[step_key] = {"status": "approved", "output": output}
                 checkpoint["steps"] = steps_state
