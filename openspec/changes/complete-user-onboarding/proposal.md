@@ -1,3 +1,7 @@
+---
+Status: approved
+---
+
 # Propuesta: Completar el onboarding de usuario
 
 ## Referencia
