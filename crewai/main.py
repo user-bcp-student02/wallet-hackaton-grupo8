@@ -1,13 +1,13 @@
-"""S1 CrewAI — Generador BCP con HITL y checkpoint por paso.
+"""S1 CrewAI — Implementador wallet con HITL y checkpoint por paso.
 
 Flujo:
   1. Conecta al MCP Projects → lista proyectos → elige proyecto → lista backlog → elige feature
-  2. Por cada agente (Arquitecto, Backend, Frontend, Pruebas, Seguridad, Chapter), corre un mini-Crew de un solo paso.
+    2. Ejecuta Security → Developer → Testing → Product Owner, un mini-Crew por paso.
   3. Tras cada paso muestra un preview y pide aprobación humana [s / n / r]:
        s = aprobar y continuar
        n = rechazar y abortar
        r = reintentar el mismo paso
-  4. Al aprobar: guarda el artefacto inmediatamente (spec .md / código .java .ts .sql)
+    4. Al aprobar: guarda el artefacto inmediatamente (specs, código e infraestructura)
      y registra el checkpoint en output/.checkpoint.json.
   5. Al volver a ejecutar: carga el checkpoint y omite los pasos ya aprobados,
      inyectando sus outputs como contexto para los pasos restantes.
@@ -15,10 +15,10 @@ Flujo:
 Estructura generada en output/:
   .checkpoint.json        ← estado de cada paso
   specs/
-    user_story.md
-    backend_spec.md
-    frontend_spec.md
-    chapter_review.md
+    security_report.md
+    developer_spec.md
+    testing_report.md
+    product_owner_review.md
   backend-quarkus/src/main/java/pe/bcp/<feature>/...
   frontend-angular/src/app/<feature>/...
   db/schema.sql  seed.sql
@@ -60,8 +60,7 @@ import textwrap
 from pathlib import Path
 from crewai import Crew, Process
 
-from crew.workflow import build_tasks, include_data, workflow_steps
-from agents.architect import agent as architect_agent
+from crew.workflow import build_tasks, workflow_steps
 
 # ── MCP clients ────────────────────────────────────────────────────
 from mcp_projects import (
@@ -70,7 +69,6 @@ from mcp_projects import (
     list_project_items,
     get_feature_from_item,
 )
-from hex_archetype import HEX_PROMPT_PREFIX
 
 # ── Flag de verbosidad MCP ─────────────────────────────────────────
 # True  → muestra el detalle de cada herramienta al arrancar
@@ -421,6 +419,13 @@ FILE_MAP = {
     "UserRepository.java":     "backend-quarkus/src/main/java/pe/bcp/login/repository/UserRepository.java",
     "schema.sql":              "db/schema.sql",
     "seed.sql":                "db/seed.sql",
+    "compose.yaml":            "compose.yaml",
+    "docker-compose.yml":      "docker-compose.yml",
+    "docker-compose.yaml":     "docker-compose.yaml",
+    "Dockerfile":              "Dockerfile",
+    "Makefile":                "Makefile",
+    ".env.example":            ".env.example",
+    "package.json":            "frontend-angular/package.json",
 }
 
 # ── Checkpoint ─────────────────────────────────────────────────────
@@ -468,7 +473,7 @@ def extract_and_save_code(text) -> list[str]:
 
     # Patrón para bloques ``` con o sin lenguaje
     code_block_pattern = re.compile(
-        r"(?:(?:archivo|file|fichero|clase|class|componente)?[:\s*#/-]*[`\"]?([a-zA-Z0-9_.\-/]+\.(?:java|ts|html|css|sql|xml|properties))[`\"]?[^\n]*\n)?"
+        r"(?:(?:archivo|file|fichero|clase|class|componente)?[:\s*#/-]*[`\"]?([a-zA-Z0-9_.\-/]+(?:\.env\.example|\.(?:java|ts|html|css|sql|xml|properties|ya?ml|json|sh|ps1|conf|toml))|Dockerfile|Makefile)[`\"]?[^\n]*\n)?"
         r"```(?:[a-zA-Z0-9_\-]+)?\n(.*?)```",
         re.DOTALL | re.IGNORECASE,
     )
@@ -486,7 +491,7 @@ def extract_and_save_code(text) -> list[str]:
             lines = code.split("\n")[:5]
             for l in lines:
                 m_line = re.search(
-                    r"(?:(?:\/\/|\/\*|#|<!--|--)\s*|\b)([a-zA-Z0-9_.\-/]+\.(?:java|ts|html|css|sql|xml|properties))\b",
+                    r"(?:(?:\/\/|\/\*|#|<!--|--)\s*|\b)([a-zA-Z0-9_.\-/]+(?:\.env\.example|\.(?:java|ts|html|css|sql|xml|properties|ya?ml|json|sh|ps1|conf|toml))|Dockerfile|Makefile)\b",
                     l,
                     re.IGNORECASE,
                 )
@@ -563,6 +568,12 @@ def extract_and_save_code(text) -> list[str]:
                 dest_rel = f"backend-quarkus/src/main/resources/{target_name}"
             elif target_name == "pom.xml":
                 dest_rel = f"backend-quarkus/{target_name}"
+            elif target_name in ("Dockerfile", "Makefile", ".env.example"):
+                dest_rel = target_name
+            elif target_name.lower().endswith((".yaml", ".yml", ".json", ".conf", ".toml")):
+                dest_rel = f"infra/{target_name}"
+            elif target_name.lower().endswith((".sh", ".ps1")):
+                dest_rel = f"scripts/{target_name}"
 
         if dest_rel and dest_rel not in seen_paths:
             seen_paths.add(dest_rel)
@@ -848,7 +859,7 @@ def _ctx_snippet(text: str, max_chars: int = 8000) -> str:
 def build_context_note(approved_outputs: dict) -> str:
     """Construye una nota de contexto con los outputs aprobados anteriores."""
     parts = []
-    labels = {key: label for key, label, *_ in workflow_steps(True)}
+    labels = {key: label for key, label, *_ in workflow_steps()}
     for key, label in labels.items():
         if key in approved_outputs:
             val = str(getattr(approved_outputs[key], "raw", approved_outputs[key]) or "")
@@ -858,14 +869,57 @@ def build_context_note(approved_outputs: dict) -> str:
     return "\n\n---\n## Contexto de pasos anteriores\n\n" + "\n\n".join(parts)
 
 
+STORY_DOCS = (
+    (("onboarding", "registro", "activation", "activacion", "kyc"),
+     "user-stories/1-user-onboarding-mvp-completion.sp.md", "mockups/W1-Registro-y-activación.md"),
+    (("low-value", "bajo monto", "pagador", "payer", "checkout", "contacto"),
+     "user-stories/2-payer-low-value-payment-confirmation.sp.md", "mockups/W2-Pago-a-contacto.md"),
+    (("qr", "merchant", "comercio"),
+     "user-stories/3-merchant-qr-payment-status-visibility.sp.md", "mockups/W3-Pago-QR-comercio.md"),
+    (("idempotencia", "idempotency", "duplicad", "reintento"),
+     "user-stories/4-payment-idempotency-protection.sp.md", "mockups/W4-Idempotencia.md"),
+    (("falla", "fallo", "reverso", "reversal", "disputa", "soporte"),
+     "user-stories/5-payment-failure-reversal-handling.sp.md", "mockups/W5-Fallas-y-reversos.md"),
+    (("conciliacion", "conciliación", "reconciliation", "ledger", "settlement"),
+     "user-stories/6-operations-transaction-reconciliation.sp.md", "mockups/W6-Conciliación.md"),
+)
+
+
+def build_project_docs_context(feature: dict) -> str:
+    """Carga la epica, limites del mock y las historias relevantes para la feature."""
+    docs_dir = Path(__file__).resolve().parent.parent / "docs"
+    feature_text = " ".join(
+        [str(feature.get("title", "")), str(feature.get("description", "")),
+         str(feature.get("acceptance_criteria", []))]
+    ).lower()
+    selected = [
+        "epic/peru-wallet-mvp.sp.md",
+        "mockups/Cobertura-y-límites.md",
+        "mockups/Controles-del-mock.md",
+        "mockups/Guía-completa-ejemplos-y-referencia-de-operaciones.md",
+    ]
+    matched = []
+    for keywords, story_path, mock_path in STORY_DOCS:
+        if any(keyword in feature_text for keyword in keywords):
+            matched.extend((story_path, mock_path))
+    if not matched:
+        matched = [path for _, story_path, mock_path in STORY_DOCS for path in (story_path, mock_path)]
+
+    sections = []
+    for relative_path in dict.fromkeys(selected + matched):
+        path = docs_dir / relative_path
+        if path.is_file():
+            sections.append(f"### docs/{relative_path}\n{path.read_text(encoding='utf-8')}")
+    return "\n\n---\n## Fuentes de producto del repositorio\n\n" + "\n\n".join(sections)
+
+
 
 # ═══════════════════════════════════════════════════════════════════
 # MAIN
 # ═══════════════════════════════════════════════════════════════════
 
 def main():
-    with_data = include_data()
-    steps = workflow_steps(with_data)
+    steps = workflow_steps()
     # ── MCP Proyectos: descubrir tools ────────────────────────────────
     print("\n[MCP Proyectos] Autenticando...")
     _proj_tools = proj_tools()
@@ -936,10 +990,10 @@ def main():
             print("Abortando. Cambia de feature o elimina output/.checkpoint.json para reiniciar.")
             raise SystemExit(0)
 
-    mode = "with-data" if with_data else "standard"
-    previous_mode = checkpoint.get("workflow_mode", "standard")
+    mode = "security-developer-testing-product-owner-v1"
+    previous_mode = checkpoint.get("workflow_mode", "legacy")
     if steps_state and previous_mode != mode:
-        print("El checkpoint pertenece a otro flujo. Conserva output/ moviéndolo a otra carpeta antes de cambiar CREWAI_INCLUDE_DATA.")
+        print("El checkpoint pertenece a otro flujo o a una version anterior. Conserva output/ moviendolo a otra carpeta antes de iniciar este flujo.")
         raise SystemExit(1)
     checkpoint["workflow_mode"] = mode
     checkpoint["feature_title"] = feature["title"]
@@ -950,16 +1004,7 @@ def main():
         if step_data.get("status") == "approved":
             approved_outputs[step_key] = step_data.get("output", "")
 
-    # ── Enriquecer backstory del Chapter con brief del feature ────────
-    architect_agent.backstory += HEX_PROMPT_PREFIX + (
-        f"\n\n## Feature brief\n"
-        f"**{feature['title']}**\n\n{feature['description']}\n\n"
-        f"**Criterios de aceptación:** {', '.join(feature['acceptance_criteria'])}"
-    )
-
-    # ── Definición de pasos ───────────────────────────────────────────
-    # (key, label, agent, spec_filename, extraer_código)
-
+    project_docs_context = build_project_docs_context(feature)
 
     # Andamiaje de build: en este punto, con proyecto y feature ya elegidos.
     ensure_scaffolding(OUTPUT_DIR)
@@ -989,18 +1034,15 @@ def main():
         user_feedback = ""
         while True:
             # Rebuild tasks fresh en cada intento
-            task_map = build_tasks(feature, with_data)
+            task_map = build_tasks(feature)
             task = task_map[step_key]
+
+            task.description += project_docs_context
 
             # Inyectar contexto de pasos anteriores en la descripción
             ctx_note = build_context_note(approved_outputs)
             if ctx_note:
                 task.description = task.description + ctx_note
-
-            if with_data and step_key == "backend":
-                task.description += "\nUsa el diseño de persistencia aprobado de Datos y persistencia. No regeneres sus archivos SQL; implementa el acceso a datos según ese contrato."
-            if with_data and step_key == "chapter":
-                task.description += "\nRevisa también el modelo, migración y compatibilidad del contrato aprobado de Datos y persistencia con backend."
 
             # Si el usuario ingresó feedback opcional en un reintento, inyectarlo como directiva prioritaria
             if user_feedback:
@@ -1045,18 +1087,18 @@ def main():
                 # el while True vuelve a ejecutar el paso
 
     # ── Todos los pasos aprobados ─────────────────────────────────────
-    chapter_text = str(getattr(approved_outputs.get("chapter", ""), "raw", approved_outputs.get("chapter", "")) or "")
+    product_owner_text = str(getattr(approved_outputs.get("product_owner", ""), "raw", approved_outputs.get("product_owner", "")) or "")
 
     print("\n" + "=" * 60)
     print("✅ TODOS LOS PASOS APROBADOS")
     print("=" * 60)
     print("  output/specs/            → " + " · ".join(step[3] for step in steps))
-    print("  output/backend-quarkus/  → archivos .java extraídos")
-    print("  output/frontend-angular/ → archivos .ts/.html extraídos")
-    print("  output/db/               → .sql extraídos")
+    print("  output/backend-quarkus/  → archivos Java extraídos")
+    print("  output/frontend-angular/ → archivos Angular extraídos")
+    print("  output/infra/ y scripts/ → configuracion e infraestructura extraidas")
     print("=" * 60)
-    print("\nVEREDICTO del Chapter (extracto):")
-    print(chapter_text[-500:] if len(chapter_text) > 500 else chapter_text)
+    print("\nDECISION del Product Owner (extracto):")
+    print(product_owner_text[-500:] if len(product_owner_text) > 500 else product_owner_text)
 
 
 if __name__ == "__main__":
