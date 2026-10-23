@@ -117,6 +117,39 @@ Las pruebas funcionales no acreditan identidad real, interoperabilidad bancaria,
 
 Reportes regenerables, no versionados: `backend/target/surefire-reports` y `frontend/playwright-report`. Las pruebas usan datos sintéticos y bases aisladas.
 
+## Baseline previo a OpenSpec `complete-user-onboarding`
+
+Verificación local del **23 de octubre de 2026**, antes de cambiar el comportamiento del onboarding:
+
+| Comprobación | Resultado |
+|---|---|
+| `npm run build` en `frontend/` | Angular producción: correcto |
+| `mvn -f backend/pom.xml -B -Dquarkus.http.test-port=0 -Dtest=WalletTest test` con Java 21 | 32 pruebas, 0 fallas, 0 errores, 0 omitidas |
+| `npm test` en `frontend/` | 26 pruebas Playwright aprobadas en escritorio y móvil; incluye el recorrido W1 |
+| Suite backend completa por `scripts/build.ps1` | `WalletTest`: 32 aprobadas; `CustomerExperienceTest` no inició porque el puerto 8081 ya estaba ocupado |
+
+Estado funcional observado en ese baseline: el cliente usa `/api/onboarding/*`, no consume los endpoints publicados `/kyc/verifications`; presenta identidad ficticia, consentimiento y confirmación; el escenario normal es `APPROVED`; y al activar acredita 50 000 céntimos. La aplicación modela KYC con `APPROVED`, `PENDING` y `DECLINED`, no con los cuatro escenarios del mock W1. Estos son hallazgos de caracterización, no decisiones de producto ni cambios aceptados.
+
+La analítica ya existente persiste `onboarding_started`, `identity_step_completed`, `consent_step_completed`, `kyc_step_completed`, `onboarding_completed` y `wallet_activated`, correlacionados por el UUID local. El reporte `/api/ops/metrics` calcula duración entre creación e inscripción completada, MAU a partir de pagadores únicos con pago exitoso, altas activas y CAC usando gasto mensual por campaña ingresado por Operaciones. Las pruebas backend existentes para métricas, abandono e intentos entre meses pasaron dentro de `WalletTest`; no se añadió instrumentación funcional para esta caracterización. El inicio de campaña de la UI está fijado a `organico`, por lo que la atribución de campañas no orgánicas requiere fuente de adquisición adicional antes de medirla.
+
+En el baseline, intentar pagar con una wallet `REJECTED` era bloqueado con `403`; el contrato de esta historia exige `409`. La implementación posterior de caracterización cambió esa respuesta a `409 WALLET_REJECTED` y la prueba de regresión quedó aprobada.
+
+## Aceptación OpenSpec `complete-user-onboarding`
+
+Ejecución local del **23 de octubre de 2026**, con la integración W1 y los cambios de onboarding:
+
+| Comprobación | Resultado |
+|---|---|
+| Build Angular de producción (`npm run build`) | Correcto |
+| Pruebas backend completas con Java 21 y puerto de prueba 8083 | 39 pruebas; 0 fallas, 0 errores, 0 omitidas |
+| Playwright completo (`npm test`) | 34 pruebas aprobadas: 17 escenarios en escritorio y móvil |
+| Contrato W1 local | Creación, consulta KYC, consulta wallet, casos de soporte, cuatro escenarios, decisiones repetidas y conflicto verificados con datos `TEST-*` |
+| Regresión W2–W6 | Suites existentes backend/UI aprobadas sin cambios en sus contratos |
+
+El alta aprobada deja la wallet nueva `ACTIVE` con saldo cero y no crea asientos de financiación. `MANUAL_REVIEW` deja `PENDING`, consulta y muestra el caso W1; `REJECTED` impide pagar con `409`; `UNAVAILABLE` conserva el registro incompleto, devuelve `503` y no crea una wallet en el fixture. Los eventos se correlacionan por UUID local; la duración usa inicio/cierre aprobados y el reporte mensual local conserva MAU/CAC como métricas observables, no metas alcanzadas.
+
+**Límite de verificación:** no hay URL del W1 desplegado. Los resultados de contrato e integración anteriores usaron el fixture local incluido para pruebas; no demuestran conectividad con un servicio externo. Para uso operativo hay que reemplazar `W1_BASE_URL=UNCONFIGURED` por la URL asignada al grupo y ejecutar una prueba en vivo. El CAC actual solo puede atribuirse a las campañas efectivamente registradas; la interfaz inicia nuevas altas con `organico`.
+
 ## Lo que esta evidencia no demuestra
 
 - No demuestra disponibilidad bancaria 24x7, rendimiento a escala, cumplimiento regulatorio ni integración real.
@@ -124,4 +157,4 @@ Reportes regenerables, no versionados: `backend/target/surefire-reports` y `fron
 - No es una auditoría de seguridad independiente.
 - No hay LLM ni evaluación de un modelo generativo; el asistente es una política local determinista.
 - El workflow está creado, pero no se afirma haberlo ejecutado en GitHub.
-- No se creó commit, PR ni publicación pública. El Git root de esta máquina es el perfil del usuario; publicar desde allí sin aislar el proyecto sería inapropiado.
+- Esta evidencia de pruebas no implica despliegue, publicación de versión ni aprobación de lanzamiento.

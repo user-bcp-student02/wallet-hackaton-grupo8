@@ -18,6 +18,28 @@ async function createPayment(request: APIRequestContext, scenario = 'APPROVED', 
   return result;
 }
 
+async function submitOnboardingWithScenario(
+  page: Page,
+  scenario: 'MANUAL_REVIEW' | 'REJECTED' | 'UNAVAILABLE',
+): Promise<void> {
+  const suffix = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`;
+  await page.goto('/');
+  await page.getByRole('button', {name: /Crear mi wallet/}).click();
+  await page.getByLabel('Nombre ficticio', {exact: true}).fill('Persona Sintética');
+  await page.getByLabel('Tu alias', {exact: true}).fill(`test.${suffix}`);
+  await page.getByLabel('Celular ficticio', {exact: true}).fill(`9${Date.now().toString().slice(-8)}`);
+  await page.getByRole('button', {name: /Continuar/}).click();
+  await page.getByRole('checkbox').check();
+  await page.getByRole('button', {name: /Continuar/}).click();
+  await page.route('**/api/onboarding/complete', async route => {
+    const body = route.request().postDataJSON() as Record<string, unknown>;
+    await route.continue({postData: JSON.stringify({...body, scenario})});
+  });
+  await page.getByLabel('Crea tu clave de 6 dígitos').fill('123456');
+  await page.getByLabel('Confirma tu clave').fill('123456');
+  await page.getByRole('button', {name: 'Finalizar registro'}).click();
+}
+
 test('W1: onboarding guiado persiste pasos y activa saldo', async ({page}) => {
   const suffix = `${Date.now()}`.slice(-7);
   await page.goto('/');
@@ -37,7 +59,8 @@ test('W1: onboarding guiado persiste pasos y activa saldo', async ({page}) => {
   await page.getByLabel('Confirma tu clave').fill('123456');
   await page.getByRole('button', {name: 'Finalizar registro'}).click();
   await expect(page.getByRole('heading', {name: /Hola, Persona/})).toBeVisible();
-  await expect(page.locator('.balance-amount')).toContainText('500.00');
+  await expect(page.locator('.balance-amount')).toContainText('0.00');
+  await expect(page.getByRole('button', {name: /Enviar A un contacto/})).toBeVisible();
   await page.getByRole('button', {name: 'Cerrar sesión'}).click();
   await page.getByLabel('Alias de tu wallet', {exact: true}).fill(`test.${suffix}`);
   await page.getByLabel('Clave de 6 dígitos', {exact: true}).fill('654321');
@@ -46,6 +69,93 @@ test('W1: onboarding guiado persiste pasos y activa saldo', async ({page}) => {
   await page.getByLabel('Clave de 6 dígitos', {exact: true}).fill('123456');
   await page.getByRole('button', {name: 'Ingresar', exact: true}).click();
   await expect(page.getByRole('heading', {name: /Hola, Persona/})).toBeVisible();
+});
+
+test('W1: revisión manual comunica PENDING y permite resolver por W1', async ({page}) => {
+  await submitOnboardingWithScenario(page, 'MANUAL_REVIEW');
+  await expect(page.getByRole('heading', {name: 'Falta una decisión de KYC'})).toBeVisible();
+  await expect(page.getByText(/revisión manual dejó tu wallet PENDING/)).toBeVisible();
+  await expect(page.getByText(/Caso de soporte W1:/)).toBeVisible();
+  await expect(page.getByRole('button', {name: /Enviar A un contacto/})).toHaveCount(0);
+
+  const result = await page.evaluate(async () => {
+    const user = await (await fetch('/api/me')).json() as {id: string; kyc_verification_id: string};
+    const headers = {'Content-Type': 'application/json', 'X-Wallet-Request': '1'};
+    await fetch('/api/demo/login', {method: 'POST', headers, body: JSON.stringify({userId: 'demo-ops'})});
+    const decision = await fetch(`/api/ops/onboarding/${user.id}`, {
+      method: 'POST', headers, body: JSON.stringify({decision: 'ACTIVE'}),
+    });
+    const approved = await decision.json() as {status: string; balance: number};
+    const repeated = await fetch(`/api/ops/onboarding/${user.id}`, {
+      method: 'POST', headers, body: JSON.stringify({decision: 'ACTIVE'}),
+    });
+    const conflict = await fetch(`/api/ops/onboarding/${user.id}`, {
+      method: 'POST', headers, body: JSON.stringify({decision: 'REJECTED'}),
+    });
+    return {decisionStatus: decision.status, approved, repeatedStatus: repeated.status, conflictStatus: conflict.status};
+  });
+  expect(result.decisionStatus).toBe(200);
+  expect(result.approved.status).toBe('ACTIVE');
+  expect(result.approved.balance).toBe(0);
+  expect(result.repeatedStatus).toBe(200);
+  expect(result.conflictStatus).toBe(409);
+});
+
+test('W1: rechazo mantiene la cuenta inelegible para pagar', async ({page}) => {
+  await submitOnboardingWithScenario(page, 'REJECTED');
+  await expect(page.getByRole('heading', {name: 'No pudimos activar tu wallet'})).toBeVisible();
+  await expect(page.getByRole('button', {name: /Enviar A un contacto/})).toHaveCount(0);
+  const payment = await page.evaluate(async () => {
+    const response = await fetch('/api/payments', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json', 'X-Wallet-Request': '1', 'Idempotency-Key': 'rejected-wallet-test'},
+      body: JSON.stringify({destination: 'luis.demo', amount: 1, channel: 'ALIAS'}),
+    });
+    return {status: response.status, body: await response.json() as {code: string}};
+  });
+  expect(payment.status).toBe(409);
+  expect(payment.body.code).toBe('WALLET_REJECTED');
+});
+
+test('W1: indisponibilidad no activa ni completa el registro', async ({page}) => {
+  await submitOnboardingWithScenario(page, 'UNAVAILABLE');
+  await expect(page.getByText('PASO 3 DE 3', {exact: true})).toBeVisible();
+  await expect(page.getByRole('alert')).toContainText('El servicio KYC no está disponible');
+  const user = await page.evaluate(async () => (await (await fetch('/api/me')).json()) as {
+    status: string; completed_at: string | null; kyc_wallet_id?: string;
+  });
+  expect(user.status).toBe('PENDING');
+  expect(user.completed_at).toBeNull();
+  expect(user.kyc_wallet_id).toBeUndefined();
+});
+
+test('W1: datos obligatorios e inválidos bloquean el avance del onboarding', async ({page}) => {
+  const suffix = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`;
+  await page.goto('/');
+  await page.getByRole('button', {name: /Crear mi wallet/}).click();
+  const name = page.getByLabel('Nombre ficticio', {exact: true});
+  const alias = page.getByLabel('Tu alias', {exact: true});
+  const phone = page.getByLabel('Celular ficticio', {exact: true});
+  const next = page.getByRole('button', {name: /Continuar/});
+
+  await next.click();
+  await expect(page.getByText('PASO 1 DE 3', {exact: true})).toBeVisible();
+  await expect(page.getByRole('alert')).toContainText('Revisa tu nombre ficticio');
+  expect(await name.evaluate((input: HTMLInputElement) => input.validity.valueMissing)).toBeTruthy();
+
+  await name.fill('Persona Sintética');
+  await alias.fill('Alias.Invalido');
+  await phone.fill('123');
+  await next.click();
+  await expect(page.getByText('PASO 1 DE 3', {exact: true})).toBeVisible();
+  await expect(page.getByRole('alert')).toContainText('Revisa tu nombre ficticio');
+  expect(await alias.evaluate((input: HTMLInputElement) => input.validity.patternMismatch)).toBeTruthy();
+  expect(await phone.evaluate((input: HTMLInputElement) => input.validity.patternMismatch)).toBeTruthy();
+
+  await alias.fill(`test.${suffix}`);
+  await phone.fill(`9${Date.now().toString().slice(-8)}`);
+  await next.click();
+  await expect(page.getByText('PASO 2 DE 3', {exact: true})).toBeVisible();
 });
 
 test('una cuenta previa configura y confirma su clave antes de continuar', async ({page}) => {

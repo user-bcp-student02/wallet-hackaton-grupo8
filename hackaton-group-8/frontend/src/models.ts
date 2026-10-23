@@ -5,6 +5,8 @@ export interface User {
   id: string; name: string; alias: string; phone: string | null; role: Role;
   status: 'ACTIVE' | 'PENDING' | 'REJECTED'; balance: number; reserved: number;
   completed_at: string | null; campaign: string; created_at: string; onboarding_step?: number; pin_setup_required?: boolean;
+  kyc_verification_id?: string; kyc_wallet_id?: string; kyc_scenario?: string;
+  kyc_status?: string; kyc_support_case_id?: string | null;
 }
 export interface Contact { id: string; name: string; alias: string; role: Role }
 export interface Ledger { account: string; amount: number; phase: string; created_at: string }

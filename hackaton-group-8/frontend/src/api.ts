@@ -2,7 +2,7 @@ export class ApiFailure extends Error {
   constructor(public status: number, public code: string, message: string) { super(message); }
 }
 
-export async function api<T>(path: string, body?: unknown, headers: Record<string, string> = {}): Promise<T> {
+export async function api<T>(path: string, body?: unknown, headers: Record<string, string> = {}, timeoutMs = 15000): Promise<T> {
   let response: Response;
   try {
     response = await fetch(`/api${path}`, {
@@ -10,7 +10,7 @@ export async function api<T>(path: string, body?: unknown, headers: Record<strin
       credentials: 'same-origin',
       headers: { 'Content-Type': 'application/json', 'X-Wallet-Request': '1', ...headers },
       body: body === undefined ? undefined : JSON.stringify(body),
-      signal: AbortSignal.timeout(15000),
+      signal: AbortSignal.timeout(timeoutMs),
     });
   } catch (error) {
     console.error('Wallet network request failed', error);

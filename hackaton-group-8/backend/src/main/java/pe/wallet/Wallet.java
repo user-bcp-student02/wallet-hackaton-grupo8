@@ -25,7 +25,7 @@ public class Wallet {
     static final Duration PIN_LOCK_DURATION = Duration.ofMinutes(15);
 
     public record OnboardingStart(String campaign) {}
-    public record OnboardingComplete(String name, String alias, String phone, boolean consent, String pin, String kyc) {}
+    public record OnboardingComplete(String name, String alias, String phone, boolean consent, String pin, String scenario) {}
     public record OnboardingStep(String step, String name, String alias, String phone, boolean consent) {}
     public record ReconcileInput(String date, String channel) {}
     public record CheckoutInput(String attemptId) {}
@@ -78,6 +78,9 @@ public class Wallet {
         if (!expected.equals(user.get("role"))) throw new ApiError(403, "FORBIDDEN", "Este perfil no tiene permiso para esta acción.");
     }
     void active(Map<String, Object> user) {
+        if ("REJECTED".equals(user.get("status"))) {
+            throw new ApiError(409, "WALLET_REJECTED", "La wallet rechazada no puede realizar pagos.");
+        }
         if (!"ACTIVE".equals(user.get("status"))) throw new ApiError(403, "WALLET_INACTIVE", "Completa la validación de tu wallet antes de pagar.");
     }
     void audit(Connection c, String actor, String action, String reference, String correlation, String detail) throws SQLException {
@@ -116,6 +119,15 @@ public class Wallet {
         result.put("balance", balance(c, text(user.get("id"))));
         result.put("reserved", number(one(c, "SELECT COALESCE(SUM(amount),0) AS total FROM payments WHERE payer_id=? AND status='PENDING'", user.get("id")).get("total")));
         result.put("demo", true);
+        Map<String, Object> kyc = one(c, "SELECT verification_id,wallet_id,scenario,status,support_case_id FROM kyc_links WHERE user_id=?",
+                user.get("id"));
+        if (kyc != null) {
+            result.put("kyc_verification_id", kyc.get("verification_id"));
+            result.put("kyc_wallet_id", kyc.get("wallet_id"));
+            result.put("kyc_scenario", kyc.get("scenario"));
+            result.put("kyc_status", kyc.get("status"));
+            result.put("kyc_support_case_id", kyc.get("support_case_id"));
+        }
         if (user.get("completed_at") == null) {
             boolean identity = one(c, "SELECT id FROM events WHERE user_id=? AND name='identity_step_completed'", user.get("id")) != null;
             boolean consent = one(c, "SELECT id FROM events WHERE user_id=? AND name='consent_step_completed'", user.get("id")) != null;
@@ -202,13 +214,59 @@ public class Wallet {
             return session(c, user);
         });
     }
-    public Map<String, Object> complete(String token, OnboardingComplete input) {
+    private void validateCompletion(OnboardingComplete input) {
         String name = clean(input.name(), 3, 80, "Escribe un nombre ficticio entre 3 y 80 caracteres.");
-        String alias = field(input.alias(), "[a-z][a-z0-9.]{2,29}", "El alias debe comenzar con una letra y tener de 3 a 30 letras minúsculas, números o puntos.");
-        String phone = field(input.phone(), "9[0-9]{8}", "Ingresa un celular ficticio peruano de 9 dígitos.");
-        String pin = field(input.pin(), "[0-9]{6}", "La clave debe tener exactamente 6 dígitos.");
+        field(input.alias(), "[a-z][a-z0-9.]{2,29}", "El alias debe comenzar con una letra y tener de 3 a 30 letras minúsculas, números o puntos.");
+        field(input.phone(), "9[0-9]{8}", "Ingresa un celular ficticio peruano de 9 dígitos.");
+        field(input.pin(), "[0-9]{6}", "La clave debe tener exactamente 6 dígitos.");
         require(input.consent(), "CONSENT_REQUIRED", "Acepta el uso de datos sintéticos para continuar.");
-        require(Set.of("APPROVED", "PENDING", "DECLINED").contains(text(input.kyc())), "KYC_SCENARIO", "Selecciona un resultado KYC de prueba.");
+    }
+
+    public void validateOnboarding(String token, OnboardingComplete input) {
+        validateCompletion(input);
+        String alias = input.alias();
+        String phone = input.phone();
+        store.tx(c -> {
+            Map<String, Object> user = actor(c, token);
+            require(user.get("completed_at") == null, "ALREADY_COMPLETED", "Este onboarding ya fue completado.");
+            require(one(c, "SELECT id FROM events WHERE user_id=? AND name='consent_step_completed'", user.get("id")) != null,
+                    "STEPS_REQUIRED", "Completa identidad y consentimiento antes de finalizar.");
+            Map<String, Object> duplicate = one(c, "SELECT id FROM users WHERE (alias=? OR phone=?) AND id<>?",
+                    alias, phone, user.get("id"));
+            if (duplicate != null) throw new ApiError(409, "IDENTITY_EXISTS", "El alias o celular de prueba ya está registrado.");
+            return null;
+        });
+    }
+
+    public Map<String, Object> complete(String token, OnboardingComplete input,
+                                        W1KycClient.Verification verification, W1KycClient.WalletSnapshot externalWallet,
+                                        String supportCaseId) {
+        validateCompletion(input);
+        require(verification != null && verification.id() != null && !verification.id().isBlank()
+                        && verification.walletId() != null && !verification.walletId().isBlank()
+                        && verification.scenario() != null && !verification.scenario().isBlank(),
+                "W1_VERIFICATION_REQUIRED", "La verificación W1 es obligatoria.");
+        String expectedStatus = switch (verification.scenario()) {
+            case "APPROVED" -> "ACTIVE";
+            case "MANUAL_REVIEW" -> "PENDING";
+            case "REJECTED" -> "REJECTED";
+            default -> throw new ApiError(502, "W1_CONTRACT_ERROR", "W1 devolvió un escenario incompatible.");
+        };
+        require(externalWallet != null && verification.walletId().equals(externalWallet.id())
+                        && expectedStatus.equals(externalWallet.status())
+                        && externalWallet.balance() != null && externalWallet.balance() == 0L
+                        && externalWallet.reserved() != null && externalWallet.reserved() == 0L
+                        && externalWallet.available() != null && externalWallet.available() == 0L
+                        && "PEN".equals(externalWallet.currency()),
+                "W1_CONTRACT_ERROR", "La wallet W1 no coincide con el escenario o no conserva saldo cero.");
+        if (verification.scenario().equals("MANUAL_REVIEW")) {
+            require(supportCaseId != null && !supportCaseId.isBlank(), "W1_SUPPORT_CASE_MISSING",
+                    "W1 no devolvió un caso de soporte para la revisión manual.");
+        }
+        String name = clean(input.name(), 3, 80, "Escribe un nombre ficticio entre 3 y 80 caracteres.");
+        String alias = input.alias();
+        String phone = input.phone();
+        String pin = input.pin();
         PinSecurity.Credential credential = PinSecurity.create(pin);
         return store.tx(c -> {
             Map<String, Object> user = actor(c, token);
@@ -217,14 +275,16 @@ public class Wallet {
                     "STEPS_REQUIRED", "Completa identidad y consentimiento antes de finalizar.");
             Map<String, Object> duplicate = one(c, "SELECT id FROM users WHERE (alias=? OR phone=?) AND id<>?", alias, phone, user.get("id"));
             if (duplicate != null) throw new ApiError(409, "IDENTITY_EXISTS", "El alias o celular de prueba ya está registrado.");
-            String status = switch (input.kyc()) { case "APPROVED" -> "ACTIVE"; case "DECLINED" -> "REJECTED"; default -> "PENDING"; };
-                exec(c, "UPDATE users SET name=?,alias=?,phone=?,status=?,completed_at=?,pin_salt=?,pin_hash=?,pin_failures=0,pin_locked_until=NULL WHERE id=?",
+            String status = externalWallet.status();
+            exec(c, "UPDATE users SET name=?,alias=?,phone=?,status=?,completed_at=?,pin_salt=?,pin_hash=?,pin_failures=0,pin_locked_until=NULL WHERE id=?",
                     name, alias, phone, status, now(), credential.salt(), credential.hash(), user.get("id"));
+            exec(c, "INSERT INTO kyc_links(user_id,verification_id,wallet_id,scenario,status,support_case_id) VALUES(?,?,?,?,?,?)",
+                    user.get("id"), verification.id(), verification.walletId(), verification.scenario(), status, supportCaseId);
             for (String step : List.of("kyc_step_completed", "onboarding_completed")) {
                 event(c, text(user.get("id")), step, text(user.get("id")));
             }
-            if (status.equals("ACTIVE")) fund(c, text(user.get("id")));
-            audit(c, text(user.get("id")), "KYC_MOCK", text(user.get("id")), id(), status);
+            if (status.equals("ACTIVE")) event(c, text(user.get("id")), "wallet_activated", text(user.get("id")));
+            audit(c, text(user.get("id")), "W1_KYC_" + status, verification.id(), id(), verification.scenario());
             return viewUser(c, one(c, "SELECT * FROM users WHERE id=?", user.get("id")));
         });
     }
@@ -250,10 +310,6 @@ public class Wallet {
                 event(c, text(user.get("id")), eventName, text(user.get("id")));
             return viewUser(c, one(c, "SELECT * FROM users WHERE id=?", user.get("id")));
         });
-    }
-    void fund(Connection c, String user) throws SQLException {
-        posting(c, null, "TREASURY", user, 50000L, "FUNDING");
-        event(c, user, "wallet_activated", user);
     }
     public List<Map<String, Object>> contacts(String token, String search) {
         String query = search == null ? "" : search.trim().toLowerCase(Locale.ROOT);
@@ -458,15 +514,47 @@ public class Wallet {
     public List<Map<String, Object>> onboardingQueue(String token) {
         return store.tx(c -> { role(actor(c, token), "OPS"); return rows(c, "SELECT id,name,alias,status FROM users WHERE status='PENDING' AND completed_at IS NOT NULL ORDER BY created_at LIMIT 200"); });
     }
-    public Map<String, Object> reviewKyc(String token, String userId, String decision) {
-        require(Set.of("APPROVED", "DECLINED").contains(text(decision)), "INVALID_DECISION", "Decisión KYC inválida.");
+    public Map<String, Object> kycLink(String token, String userId) {
+        return store.tx(c -> {
+            role(actor(c, token), "OPS");
+            Map<String, Object> link = one(c, "SELECT verification_id,wallet_id,scenario,status,support_case_id FROM kyc_links WHERE user_id=?",
+                    userId);
+            if (link == null) throw new ApiError(404, "KYC_LINK_NOT_FOUND", "No encontramos la verificación W1 de esta cuenta.");
+            return link;
+        });
+    }
+    public Map<String, Object> reviewKyc(String token, String userId, W1KycClient.Verification verification,
+                                         W1KycClient.WalletSnapshot externalWallet) {
+        require(verification != null && !text(verification.id()).isBlank()
+                        && !text(verification.walletId()).isBlank()
+                        && externalWallet != null && Set.of("ACTIVE", "REJECTED").contains(text(externalWallet.status())),
+                "INVALID_DECISION", "La respuesta de decisión W1 debe ser ACTIVE o REJECTED.");
+        String finalStatus = externalWallet.status();
+        require(verification.walletId().equals(externalWallet.id())
+                        && externalWallet.balance() != null && externalWallet.balance() == 0L
+                        && externalWallet.reserved() != null && externalWallet.reserved() == 0L
+                        && externalWallet.available() != null && externalWallet.available() == 0L
+                        && "PEN".equals(externalWallet.currency()),
+                "W1_CONTRACT_ERROR", "La wallet W1 no coincide con la decisión o no conserva saldo cero.");
         return store.tx(c -> {
             Map<String, Object> ops = actor(c, token); role(ops, "OPS");
             Map<String, Object> user = one(c, "SELECT * FROM users WHERE id=?", userId);
-            require(user != null && user.get("status").equals("PENDING") && user.get("completed_at") != null, "KYC_NOT_PENDING", "La cuenta no está pendiente de revisión.");
-            exec(c, "UPDATE users SET status=? WHERE id=?", decision.equals("APPROVED") ? "ACTIVE" : "REJECTED", userId);
-            if (decision.equals("APPROVED")) fund(c, userId);
-            audit(c, text(ops.get("id")), "HUMAN_KYC_" + decision, userId, userId, "Identidad sintética; sin verificación real");
+            Map<String, Object> link = one(c, "SELECT * FROM kyc_links WHERE user_id=?", userId);
+            require(user != null && link != null, "KYC_LINK_NOT_FOUND", "No encontramos la verificación W1 de esta cuenta.");
+            require(text(link.get("verification_id")).equals(verification.id())
+                            && text(link.get("wallet_id")).equals(verification.walletId())
+                            && text(link.get("scenario")).equals(verification.scenario()),
+                    "W1_CONTRACT_ERROR", "La decisión recibida no corresponde a la verificación W1 guardada.");
+            String current = text(user.get("status"));
+            if (Set.of("ACTIVE", "REJECTED").contains(current)) {
+                if (current.equals(finalStatus)) return viewUser(c, user);
+                throw new ApiError(409, "DECISION_CONFLICT", "La decisión KYC final no se puede cambiar.");
+            }
+            require(current.equals("PENDING") && user.get("completed_at") != null, "KYC_NOT_PENDING", "La cuenta no está pendiente de revisión.");
+            exec(c, "UPDATE users SET status=? WHERE id=?", finalStatus, userId);
+            exec(c, "UPDATE kyc_links SET status=? WHERE user_id=?", finalStatus, userId);
+            if (finalStatus.equals("ACTIVE")) event(c, userId, "wallet_activated", userId);
+            audit(c, text(ops.get("id")), "W1_KYC_DECISION_" + finalStatus, verification.id(), userId, verification.scenario());
             return viewUser(c, one(c, "SELECT * FROM users WHERE id=?", userId));
         });
     }

@@ -2,9 +2,11 @@
 
 ## Contexto técnico
 
-La spec aprobada cubre el recorrido guiado, validación, resultados de KYC, activación de wallet e instrumentación de onboarding. Los contratos disponibles son los endpoints simulados W1 descritos en `docs/mockups/W1-Registro-y-activación.md`; el mock acepta únicamente documentos ficticios `TEST-*`, mantiene estado en memoria y no calcula duración, MAU, CAC ni atribución.
+La spec aprobada cubre el recorrido guiado, validación, resultados de KYC, activación de wallet e instrumentación. La aplicación consumidora está en `hackaton-group-8/`: Quarkus/Java 21, Angular, H2 y pruebas JUnit/Playwright. Los contratos simulados W1 están documentados en `docs/mockups/W1-Registro-y-activación.md`; el mock acepta únicamente documentos `TEST-*`, mantiene estado en memoria y no calcula duración, MAU, CAC ni atribución.
 
-Este checkout contiene el harness CrewAI, OpenSpec y documentación del mock, pero no la aplicación wallet consumidora. Por tanto, este diseño fija límites de integración y preservación de contratos; no asigna clases, framework, persistencia ni proveedor analítico que no estén presentes.
+La aplicación existente usa `/api/onboarding/*`, escenarios `APPROVED/PENDING/DECLINED` y acredita S/ 500 a las altas aprobadas. Esto no cumple el contrato aprobado, que exige consumir W1 y mantener saldo cero. No hay URL de un mock W1 desplegado en este entorno. El cliente usará `W1_BASE_URL` obligatoria en ejecución; las pruebas reproducibles usarán un servidor local de contrato derivado de los campos y respuestas publicados. Esas pruebas no se describirán como integración con un W1 desplegado.
+
+Producto/Cumplimiento confirmaron el flujo existente: identidad ficticia (nombre, alias y celular), consentimiento para datos sintéticos, confirmación con PIN de seis dígitos y KYC. También confirmaron las definiciones analíticas existentes: inicio en `onboarding_started`, cierre en `onboarding_completed`, correlación por UUID local, duración desde inicio hasta finalización, y MAU como pagadores únicos con un pago exitoso por mes calendario de Perú. Adquisición confirmó gasto mensual por campaña registrado por Operaciones, campaña capturada al alta y CAC como gasto atribuido dividido entre nuevas wallets activadas. Los datos siguen siendo sintéticos; estas definiciones no prueban metas de negocio.
 
 ## Goals
 
@@ -15,9 +17,9 @@ Este checkout contiene el harness CrewAI, OpenSpec y documentación del mock, pe
 
 ## Non-goals
 
-- Implementar onboarding, APIs, persistencia o analítica en este repositorio, el harness CrewAI o el mock.
+- Implementar endpoints nuevos en el mock W1 o alterar sus contratos.
 - Agregar o cambiar endpoints W1-W6, validar documentos reales, prevenir registros duplicados o mover dinero real.
-- Definir requisitos regulatorios, documentos reales, pasos obligatorios, taxonomía analítica, proveedor o tecnología de almacenamiento.
+- Validar documentos reales, integrar proveedores de dinero real o introducir servicios externos adicionales.
 - Garantizar los resultados de negocio de duración, MAU o CAC; la solución solo debe permitir medirlos.
 
 ## Contratos protegidos
@@ -30,18 +32,19 @@ Este checkout contiene el harness CrewAI, OpenSpec y documentación del mock, pe
 
 ## Componentes afectados
 
-- **Aplicación cliente consumidora (fuera de este checkout):** secuencia y paso actual, validación, mensajes, estados KYC y navegación al punto de entrada de pagos.
-- **Integración KYC/wallet (fuera de este checkout):** cliente HTTP que invoca los endpoints W1 y traduce sus resultados a estados visibles sin alterar el contrato.
-- **Instrumentación y salida analítica (fuera de este checkout):** eventos correlacionados por recorrido y agregados para las métricas acordadas.
+- **Aplicación consumidora `hackaton-group-8/`:** secuencia y paso actual, validación, mensajes, estados KYC, acceso a pagos e instrumentación.
+- **Integración KYC/W1:** cliente HTTP configurable que invoca rutas publicadas y traduce resultados sin alterar el contrato; sin URL configurada, el alta falla explícitamente y no usa un resultado local de éxito.
+- **Pruebas de contrato:** servidor local únicamente de pruebas, con fixtures sintéticos para rutas, campos y estados publicados. No se añade ningún endpoint de control al producto.
+- **Analítica:** eventos y reporte mensual existentes en la aplicación/H2; el mock no recibe ni calcula métricas.
 - **Mock W1 y harness CrewAI:** contratos de referencia y preparación de escenarios; no requieren cambios para esta historia.
 
 ## Decisiones técnicas y alternativas
 
 ### Integración con KYC
 
-**Decisión:** consumir los endpoints W1 existentes desde la aplicación objetivo y representar sus estados en el flujo cliente. Mantener el mock como dependencia simulada de prueba.
+**Decisión:** consumir los endpoints W1 existentes desde `hackaton-group-8/`, usando `W1_BASE_URL` como configuración obligatoria en ejecución. En pruebas, un servidor HTTP local reproduce solo el contrato documentado. No se proporciona un fallback local que pueda presentar un KYC no verificado como exitoso. El alta aprobada crea el usuario local activo sin asientos de financiación.
 
-**Alternativas consideradas:** agregar un endpoint de onboarding al mock, mover el flujo al harness CrewAI o introducir un backend nuevo. Se descartan dentro de este alcance: ampliarían los contratos o asignarían comportamiento de producto a componentes que no son la aplicación consumidora.
+**Alternativas consideradas:** agregar un endpoint de onboarding al mock, mover el flujo al harness CrewAI o mantener los resultados KYC locales como éxito cuando W1 no está configurado. Se descartan porque ampliarían el contrato, moverían comportamiento de producto al componente equivocado o eludirían la verificación.
 
 ### Instrumentación
 
@@ -49,20 +52,20 @@ Este checkout contiene el harness CrewAI, OpenSpec y documentación del mock, pe
 
 **Alternativas consideradas:** derivar duración/MAU/CAC desde las respuestas del mock o añadir endpoints analíticos al mock. Se descartan porque el mock no expone esos datos y la spec asigna esa responsabilidad a la aplicación.
 
-**Pendiente de selección:** tecnología, esquema de eventos, persistencia y mecanismo de reporte. No se puede elegir sin identificar el repositorio consumidor y su infraestructura actual.
+**Decisión confirmada:** conservar los eventos, H2 y reporte mensual existentes en la aplicación; inicio y cierre se correlacionan por UUID local. MAU usa pagadores únicos con pago exitoso en el mes calendario de Perú. Operaciones registra el gasto por campaña/mes; CAC es gasto atribuido entre nuevas wallets activadas. El mock no calcula ninguna de estas métricas.
 
 ## Estrategia incremental
 
-1. Identificar el repositorio consumidor y su arquitectura existente; resolver con Producto y Cumplimiento los pasos/datos obligatorios y sus validaciones.
-2. Acordar la frontera temporal de inicio/fin, la identidad de correlación del recorrido, la definición de usuario activo/MAU y la fuente/regla de atribución CAC.
-3. Añadir pruebas de caracterización de los contratos y estados actuales antes de cambiar comportamiento crítico.
-4. Implementar secuencia, paso actual y validación como un primer cambio acotado, sin llamadas adicionales al mock.
-5. Integrar creación/consulta KYC y representar `APPROVED`, `MANUAL_REVIEW`, `REJECTED` y `UNAVAILABLE`; habilitar pagos solo para wallet activa.
-6. Instrumentar eventos desde la aplicación y añadir el reporte mensual una vez acordadas sus definiciones. Mantener cada tramo revisable y revertible por separado.
+1. Ejecutar y registrar el baseline actual de la app y sus reportes antes de cambiar comportamiento.
+2. Caracterizar mediante pruebas las rutas/campos W1 documentados con un servidor de contrato local; distinguirlo de una prueba contra servicio desplegado.
+3. Mantener los pasos y métricas existentes según las definiciones confirmadas.
+4. Cambiar el flujo para que solicite/verifique KYC en W1, persista sus identificadores, mapee los estados publicados y no acredite saldo.
+5. Añadir pruebas de regresión para aprobación, revisión manual, rechazo, indisponibilidad, decisiones estables y acceso a pagos.
+6. Verificar analítica mensual y contratos W1–W6 sin modificar el mock.
 
 ## Pruebas de caracterización previas
 
-- Capturar método, ruta, cuerpos, campos de respuesta y códigos HTTP de creación/consulta KYC, decisión, wallet y soporte según los mockups.
+- Capturar método, ruta, cuerpos, campos de respuesta y códigos HTTP de creación/consulta KYC, decisión, wallet y soporte según los mockups, usando únicamente fixtures `TEST-*`.
 - Verificar los cuatro escenarios KYC, saldo inicial cero, `503` sin wallet, `PENDING` con caso de soporte y el rechazo de pago para wallets rechazadas (`409`).
 - Verificar repetición idempotente de decisiones y conflicto (`409 DECISION_CONFLICT`) al intentar cambiar una decisión final.
 - En la aplicación consumidora, registrar el comportamiento actual de navegación, validación, estados y acceso a pagos para proteger compatibilidad visible antes de modificarlo.
@@ -85,10 +88,7 @@ Este checkout contiene el harness CrewAI, OpenSpec y documentación del mock, pe
 
 ## Decisiones abiertas
 
-- Repositorio y arquitectura de la aplicación consumidora.
-- Pasos y datos obligatorios, reglas de validación y mensajes aprobados por Producto/Cumplimiento.
-- Frontera temporal de inicio/fin, definición de usuario activo/MAU, correlación de eventos y fuente/reglas de CAC.
-- Infraestructura analítica existente, retención y destino del reporte mensual.
-- Disponibilidad de feature flags u otro mecanismo de reversión en la aplicación consumidora.
+- URL del W1 desplegado, necesaria para una prueba de integración real y el uso operativo. No existe en el entorno actual; las pruebas locales no sustituyen esa evidencia.
+- Confirmar configuración de `W1_BASE_URL` al ejecutar la app. Si falta, la integración devuelve un error explícito y no activa la wallet.
 
-La implementación debe detenerse hasta resolver las decisiones que condicionan los requisitos y revisar este diseño en el repositorio consumidor. No se crea un ADR separado: este diseño no selecciona una tecnología ni introduce una decisión arquitectónica irreversible.
+Las definiciones de producto quedaron confirmadas; la URL del servicio W1 desplegado permanece pendiente y limita únicamente la verificación en vivo. No se crea un ADR separado: el cliente HTTP configurable y sus pruebas locales son decisiones reversibles dentro de esta historia.
