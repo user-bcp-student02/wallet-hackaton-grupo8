@@ -3,29 +3,26 @@
 Los agentes parten con instrucciones básicas. Sigue [Mejora tu agente](MEJORA_TU_AGENTE.md) para completar el ejercicio y consultar resultados desde el portal.
 
 Base de trabajo del Lab 4, S1. Lee una funcionalidad del backlog mediante MCP Projects
-y genera una solución Quarkus 3.x y Angular 17 con seis agentes de CrewAI, o siete cuando el equipo activa Datos y persistencia.
-Cada agente tiene su definición y la tarea en un archivo propio.
+y ejecuta cuatro agentes CrewAI sobre las historias y contratos disponibles en `docs/`.
+El flujo genera una solución Quarkus 3.x, Angular 17 e infraestructura local necesaria.
 
 ## Editar tu agente
 
-Los agentes son básicos: un objetivo breve, una responsabilidad por rol y una salida concreta.
-Usa un requisito pequeño, por ejemplo crear una tarea con título.
-Ajusta ese ejemplo al requisito del backlog de tu equipo.
-Testing propone un caso válido y otro inválido; Security revisa entradas y secretos;
-Chapter compara las entregas con el requisito. Los prompts conservan los formatos
-que necesita el flujo para guardar código y revisar resultados.
+Cada agente tiene una responsabilidad y un artefacto concreto. El orden es fijo:
+Security revisa riesgos antes de implementar; Developer construye el recorrido full stack;
+Testing prepara cobertura verificable; Product Owner contrasta la entrega con el Issue,
+las historias y la evidencia disponible. Cada etapa conserva aprobacion, rechazo y reintento
+humanos.
 
 Cada participante edita el archivo de su rol:
 
-- `agents/architect.py`
-- `agents/backend.py`
-- `agents/frontend.py`
-- `agents/testing.py`
 - `agents/security.py`
-- `agents/chapter.py`
+- `agents/developer.py`
+- `agents/testing.py`
+- `agents/product_owner.py`
 
-El orden es `architect → backend → frontend → testing → security → chapter`.
-Chapter reemplaza al LT como revisor final. La aprobación humana se conserva entre etapas.
+El orden es `security → developer → testing → product_owner`.
+Product Owner emite una decision de producto para revision humana; no aprueba el lanzamiento.
 Consulta [TEAM.md](TEAM.md) para crear el repo de tu equipo y repartir los archivos.
 
 ## Preparar el entorno
@@ -84,12 +81,12 @@ o `n` para rechazar y detener el flujo. El checkpoint permite retomar los pasos 
 
 Los artefactos se guardan en `output/`:
 
-- `specs/user_story.md`: especificación del arquitecto.
-- `specs/backend_spec.md` y `specs/frontend_spec.md`: implementaciones.
+- `specs/security_report.md`: controles preventivos para la implementacion.
+- `specs/developer_spec.md`: implementacion full stack, infraestructura y trazabilidad.
 - `specs/testing_report.md`: casos, tests y comandos. Los resultados quedan pendientes de ejecución humana.
-- `specs/security_report.md`: hallazgos y verificaciones de seguridad.
-- `specs/chapter_review.md`: revisión final del Chapter.
+- `specs/product_owner_review.md`: matriz de criterios, brechas y decision para revision humana.
 - `backend-quarkus/` y `frontend-angular/`: código extraído y configuración de arranque.
+- `infra/`, `scripts/` y archivos en la raiz: infraestructura local extraida cuando el Issue la requiere.
 - `.checkpoint.json`: estado local de la ejecución.
 
 ## Probar la solución generada
@@ -117,26 +114,8 @@ Revisa los comandos adicionales del informe de pruebas y registra sus resultados
 python tools/verify.py
 ```
 
-Los checks recorren los seis roles, verifican artefactos, contexto y reanudación.
+Los checks recorren los cuatro roles, verifican artefactos, contexto docs, infraestructura y reanudación.
 Sustituyen las llamadas al modelo y a MCP para ejecutarse sin credenciales.
 La ejecución real de Copilot y MCP requiere el entorno del taller.
 
 Consulta [SOURCE.md](SOURCE.md) para ver el origen de esta copia.
-
-## Equipo de siete (solo CrewAI)
-
-El grupo de siete añade un responsable de **Datos y persistencia**, que edita
-únicamente `agents/data.py` y entrega su propio PR. Los equipos de seis mantienen
-sus seis roles. En `team.json`, solo el equipo de siete añade `"data": "usuario-real"`
-dentro de `roles`, con un usuario distinto de los otros responsables.
-
-Antes de iniciar un flujo nuevo, el líder del equipo de siete configura
-`CREWAI_INCLUDE_DATA=true` en su `.env`. El orden será Arquitectura → Datos y
-persistencia → Backend → Frontend → Pruebas → Seguridad → Chapter. Cada etapa
-mantiene aprobación, rechazo y reintento humanos. Datos produce `output/specs/data_spec.md`
-y propuestas SQL en `output/db/`; no ejecuta migraciones. Backend usa ese contrato
-y Chapter lo revisa. Los participantes mejoran las instrucciones iniciales de su agente.
-
-Por defecto la variable es `false`. Un checkpoint de seis etapas no se reutiliza
-en el flujo de siete ni viceversa: conserva la carpeta `output/` con otro nombre
-antes de cambiar el modo. No borres evidencia previa para cambiar de flujo.
