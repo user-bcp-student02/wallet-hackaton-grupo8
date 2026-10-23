@@ -21,7 +21,7 @@ class WalletTest {
     @BeforeEach
     void reset() {
         store.tx(c -> {
-            for (String table : List.of("callbacks", "audit", "mismatches", "cases", "ledger", "provider_results", "payments", "qr_codes", "events", "sessions", "acquisition", "users"))
+            for (String table : List.of("callbacks", "audit", "mismatches", "cases", "kyc_links", "ledger", "provider_results", "payments", "qr_codes", "events", "sessions", "acquisition", "users"))
                 exec(c, "DELETE FROM " + table);
             return null;
         });
@@ -54,11 +54,26 @@ class WalletTest {
     String register(String scenario, String alias, String phone) {
         String token = wallet.start(new Wallet.OnboardingStart("organico"));
         identity(token, alias, phone);
-        wallet.complete(token, new Wallet.OnboardingComplete("Persona Sintética", alias, phone, true, "123456", scenario));
+        String w1Scenario = switch (scenario) {
+            case "PENDING" -> "MANUAL_REVIEW";
+            case "DECLINED" -> "REJECTED";
+            default -> "APPROVED";
+        };
+        String status = switch (w1Scenario) {
+            case "APPROVED" -> "ACTIVE";
+            case "MANUAL_REVIEW" -> "PENDING";
+            default -> "REJECTED";
+        };
+        W1KycClient.Verification verification = new W1KycClient.Verification(
+                "kyc-" + alias, "wallet-" + alias, w1Scenario, status);
+        W1KycClient.WalletSnapshot externalWallet = new W1KycClient.WalletSnapshot(
+                "wallet-" + alias, status, 0L, 0L, 0L, "PEN");
+        wallet.complete(token, new Wallet.OnboardingComplete("Persona Sintética", alias, phone, true, "123456", null),
+                verification, externalWallet, w1Scenario.equals("MANUAL_REVIEW") ? "case-" + alias : null);
         return token;
     }
 
-    @Test void onboardingTracksEachStepAndFundsExactlyOnce() {
+    @Test void onboardingTracksEachStepWithoutCreditingFunds() {
         String token = wallet.start(new Wallet.OnboardingStart("organico"));
         assertEquals("PENDING", wallet.me(token).get("status"));
         assertEquals(1, wallet.me(token).get("onboarding_step"));
@@ -67,13 +82,37 @@ class WalletTest {
         assertEquals(2, wallet.me(token).get("onboarding_step"));
         wallet.onboardingStep(token, new Wallet.OnboardingStep("consent", null, null, null, true));
         assertEquals(3, wallet.me(token).get("onboarding_step"));
-        var complete = new Wallet.OnboardingComplete("Persona Demo", "persona.demo", "900000011", true, "123456", "APPROVED");
-        assertEquals("ACTIVE", wallet.complete(token, complete).get("status"));
-        assertEquals(50000, balance(token));
-        assertThrows(ApiError.class, () -> wallet.complete(token, complete));
-        assertEquals(50000, balance(token));
+        var complete = new Wallet.OnboardingComplete("Persona Demo", "persona.demo", "900000011", true, "123456", null);
+        var verification = new W1KycClient.Verification("kyc-persona", "wallet-persona", "APPROVED", "ACTIVE");
+        var externalWallet = new W1KycClient.WalletSnapshot("wallet-persona", "ACTIVE", 0L, 0L, 0L, "PEN");
+        assertEquals("ACTIVE", wallet.complete(token, complete, verification, externalWallet, null).get("status"));
+        assertEquals(0, balance(token));
+        assertThrows(ApiError.class, () -> wallet.complete(token, complete, verification, externalWallet, null));
+        assertEquals(0, balance(token));
+        String userId = Wallet.text(wallet.me(token).get("id"));
         store.tx(c -> {
-            assertEquals(6, rows(c, "SELECT * FROM events WHERE user_id=?", wallet.me(token).get("id")).size());
+            List<Map<String, Object>> events = rows(c, "SELECT name,user_id,reference_id FROM events WHERE user_id=?", userId);
+            assertEquals(6, events.size());
+            assertEquals(Set.of("onboarding_started", "identity_step_completed", "consent_step_completed",
+                    "kyc_step_completed", "onboarding_completed", "wallet_activated"),
+                    events.stream().map(event -> Wallet.text(event.get("name"))).collect(java.util.stream.Collectors.toSet()));
+            assertTrue(events.stream().allMatch(event -> userId.equals(event.get("user_id"))
+                    && userId.equals(event.get("reference_id"))));
+            return null;
+        });
+    }
+
+    @Test void interruptedOnboardingHasCorrelatedStartsAndNoCompletionEvent() {
+        String token = wallet.start(new Wallet.OnboardingStart("organico"));
+        identity(token, "interrupted.demo", "900000021");
+        String userId = Wallet.text(wallet.me(token).get("id"));
+        store.tx(c -> {
+            List<Map<String, Object>> events = rows(c, "SELECT name,user_id,reference_id FROM events WHERE user_id=?", userId);
+            assertEquals(Set.of("onboarding_started", "identity_step_completed", "consent_step_completed"),
+                    events.stream().map(event -> Wallet.text(event.get("name"))).collect(java.util.stream.Collectors.toSet()));
+            assertTrue(events.stream().allMatch(event -> userId.equals(event.get("user_id"))
+                    && userId.equals(event.get("reference_id"))));
+            assertEquals(0, rows(c, "SELECT id FROM events WHERE user_id=? AND name='onboarding_completed'", userId).size());
             return null;
         });
     }
@@ -81,22 +120,37 @@ class WalletTest {
         String token = wallet.start(new Wallet.OnboardingStart("organico"));
         assertThrows(ApiError.class, () -> wallet.onboardingStep(token, new Wallet.OnboardingStep("identity", "X", "bad", "123", false)));
         assertThrows(ApiError.class, () -> wallet.onboardingStep(token, new Wallet.OnboardingStep("consent", null, null, null, true)));
-        post("/onboarding/complete", token, Map.of("name", "Persona Demo", "alias", "persona.demo", "phone", "900000011", "consent", true, "pin", "123456", "kyc", "APPROVED")).then().statusCode(400).body("code", equalTo("STEPS_REQUIRED"));
+        post("/onboarding/complete", token, Map.of("name", "Persona Demo", "alias", "persona.demo", "phone", "900000011", "consent", true, "pin", "123456")).then().statusCode(400).body("code", equalTo("STEPS_REQUIRED"));
         identity(token, "persona.demo", "900000011");
-        post("/onboarding/complete", token, Map.of("name", "Persona Demo", "alias", "persona.demo", "phone", "900000011", "consent", false, "pin", "123456", "kyc", "APPROVED")).then().statusCode(400).body("code", equalTo("CONSENT_REQUIRED"));
+        post("/onboarding/complete", token, Map.of("name", "Persona Demo", "alias", "persona.demo", "phone", "900000011", "consent", false, "pin", "123456")).then().statusCode(400).body("code", equalTo("CONSENT_REQUIRED"));
     }
     @Test void pendingKycNeedsHumanAndRejectedCannotPay() {
         String pending = register("PENDING", "pending.demo", "900000012");
         assertEquals(0, balance(pending));
         assertThrows(ApiError.class, () -> wallet.pay(pending, Wallet.id(), input("APPROVED", 100)));
         String uid = Wallet.text(wallet.me(pending).get("id"));
-        assertThrows(ApiError.class, () -> wallet.reviewKyc(ana, uid, "APPROVED"));
-        wallet.reviewKyc(ops, uid, "APPROVED");
-        assertEquals(50000, balance(pending));
-        assertThrows(ApiError.class, () -> wallet.reviewKyc(ops, uid, "APPROVED"));
+        store.tx(c -> {
+            assertEquals(0, rows(c, "SELECT id FROM events WHERE user_id=? AND name='wallet_activated'", uid).size());
+            return null;
+        });
+        W1KycClient.Verification approved = new W1KycClient.Verification(
+                "kyc-pending.demo", "wallet-pending.demo", "MANUAL_REVIEW", "ACTIVE");
+        W1KycClient.WalletSnapshot externalWallet = new W1KycClient.WalletSnapshot(
+                "wallet-pending.demo", "ACTIVE", 0L, 0L, 0L, "PEN");
+        assertThrows(ApiError.class, () -> wallet.reviewKyc(ana, uid, approved, externalWallet));
+        wallet.reviewKyc(ops, uid, approved, externalWallet);
+        assertEquals(0, balance(pending));
+        assertEquals("ACTIVE", wallet.reviewKyc(ops, uid, approved, externalWallet).get("status"));
+        store.tx(c -> {
+            assertEquals(1, rows(c, "SELECT id FROM events WHERE user_id=? AND name='wallet_activated'", uid).size());
+            return null;
+        });
         String rejected = register("DECLINED", "rejected.demo", "900000013");
         assertEquals("REJECTED", wallet.me(rejected).get("status"));
-        assertThrows(ApiError.class, () -> wallet.pay(rejected, Wallet.id(), input("APPROVED", 100)));
+        ApiError rejectedPayment = assertThrows(ApiError.class,
+                () -> wallet.pay(rejected, Wallet.id(), input("APPROVED", 100)));
+        assertEquals(409, rejectedPayment.getResponse().getStatus());
+        assertEquals("WALLET_REJECTED", ((Map<?, ?>) rejectedPayment.getResponse().getEntity()).get("code"));
     }
     @Test void duplicateIdentityIsRejected() {
         String token = wallet.start(new Wallet.OnboardingStart("organico"));
@@ -106,7 +160,7 @@ class WalletTest {
         register("APPROVED", "return.demo", "900000015");
         String token = wallet.login("return.demo", "123456");
         assertEquals("return.demo", wallet.me(token).get("alias"));
-        assertEquals(50000, balance(token));
+        assertEquals(0, balance(token));
         assertFalse(wallet.me(token).containsKey("pin_hash"));
         assertFalse(wallet.me(token).containsKey("pin_salt"));
         assertThrows(ApiError.class, () -> wallet.login("return.demo", "654321"));
@@ -160,10 +214,13 @@ class WalletTest {
         assertEquals(49875, balance(ana));
         String token = wallet.start(new Wallet.OnboardingStart("organico"));
         identity(token, "customer.demo", "900000019");
-        post("/onboarding/complete", token, Map.of("name", "Persona Sintética", "alias", "customer.demo",
-            "phone", "900000019", "consent", true, "pin", "123456")).then().statusCode(200).body("status", equalTo("ACTIVE"));
-        }
-        @Test void approvedPaymentIsAtomicAndReceiptPersists() {
+        wallet.complete(token, new Wallet.OnboardingComplete("Persona Sintética", "customer.demo",
+                "900000019", true, "123456", null),
+                new W1KycClient.Verification("kyc-customer", "wallet-customer", "APPROVED", "ACTIVE"),
+                new W1KycClient.WalletSnapshot("wallet-customer", "ACTIVE", 0L, 0L, 0L, "PEN"), null);
+        assertEquals(0, balance(token));
+    }
+    @Test void approvedPaymentIsAtomicAndReceiptPersists() {
         var p = pay("APPROVED", 1234);
         assertEquals("SUCCEEDED", p.get("status"));
         assertEquals(48766, balance(ana));
@@ -351,9 +408,9 @@ class WalletTest {
         assertEquals(1, wallet.reconcile(ops, day(), null).get("unmatched"));
     }
     @Test void metricsMeasureActualEventsAndAcquisition() {
-        String user = register("APPROVED", "metric.demo", "900000020");
-        wallet.pay(user, Wallet.id(), input("APPROVED", 1000));
-        wallet.pay(user, Wallet.id(), input("DECLINED", 1000));
+        register("APPROVED", "metric.demo", "900000020");
+        wallet.pay(ana, Wallet.id(), input("APPROVED", 1000));
+        wallet.pay(ana, Wallet.id(), input("DECLINED", 1000));
         String month = YearMonth.now(Wallet.LIMA).toString();
         wallet.acquisition(ops, new Wallet.AcquisitionInput(month, "organico", 1000L));
         var report = wallet.metrics(ops, month);

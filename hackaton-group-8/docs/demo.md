@@ -13,7 +13,7 @@ Las metas del trimestre no se presentan como resultados reales.
 1. Crear wallet de prueba.
 2. Ingresar nombre, alias y celular inventados, por ejemplo un alias todavía no usado y nueve dígitos que comiencen con `9`.
 3. Mostrar el consentimiento y el resumen de datos; finalizar sin seleccionar resultados de identidad.
-4. Mostrar la wallet activa y los S/ 500 sintéticos.
+4. Mostrar la wallet activa con saldo cero. El onboarding no acredita fondos; usa los perfiles presembrados para demostrar pagos con saldo de prueba.
 
 Para volver a la cuenta, cerrar sesión e ingresar el alias en la pantalla de acceso. La revisión de cuentas pendientes pertenece a Operaciones, no al usuario que se registra.
 

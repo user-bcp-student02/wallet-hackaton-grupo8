@@ -6,7 +6,8 @@
 - [Wallet](../backend/src/main/java/pe/wallet/Wallet.java): reglas, estados, contabilidad, callbacks, soporte, conciliación, métricas y guía.
 - [Store](../backend/src/main/java/pe/wallet/Store.java): transacciones JDBC y datos sintéticos iniciales.
 - [Esquema inicial](../backend/src/main/resources/schema.sql): claves, referencias, índices y restricciones de unicidad.
-- [API HTTP](../backend/src/main/java/pe/wallet/WalletResource.java): contrato de transporte y QR PNG.
+- [API HTTP](../backend/src/main/java/pe/wallet/WalletResource.java): contrato de transporte, integración KYC W1 y QR PNG.
+- [Cliente W1](../backend/src/main/java/pe/wallet/W1KycClient.java): llamadas HTTP con base URL configurada; las pruebas usan un servidor local de contrato.
 - [Guardas HTTP](../backend/src/main/java/pe/wallet/HttpGuards.java), [JSON estricto](../backend/src/main/java/pe/wallet/JsonConfig.java) y [errores](../backend/src/main/java/pe/wallet/Errors.java).
 - [Angular](../frontend/src/app.ts): vistas por rol, formularios, recuperación de intentos y consulta periódica.
 
@@ -34,13 +35,14 @@ Cada fase tiene dos asientos:
 
 | Fase | Débito | Crédito |
 |---|---|---|
-| Activación sintética | Tesorería | Wallet nueva |
 | Reserva | Pagador | Escrow |
 | Éxito | Escrow | Destino |
 | Rechazo / expiración mock | Escrow | Pagador |
 | Reverso aprobado | Destino | Pagador |
 
 El saldo disponible es la suma del ledger por cuenta. No hay una segunda columna de saldo que pueda divergir. Un pendiente reduce el disponible y expone su monto reservado por separado.
+
+Los perfiles de evaluación presembrados conservan su saldo de demostración. Las altas nuevas no generan asientos de financiación: W1 crea la wallet con saldo cero. Para que el registro opere, `W1_BASE_URL` debe apuntar al mock asignado; sin URL, el endpoint devuelve un error explícito y no activa localmente la cuenta.
 
 ## Invariantes y evidencia observable
 
@@ -118,7 +120,7 @@ Revisión del 23 de octubre de 2026 contra la épica y las seis historias de usu
 | Prioridad | Hallazgo inicial | Adaptación y estado |
 |---|---|---|
 | Crítica para publicar | El acceso por perfil/alias no comprueba identidad; cualquiera con acceso local puede entrar como OPS | Sigue siendo un bloqueo de lanzamiento. El formulario se simplifica, pero no se presenta como autenticación segura. No publicar en Internet |
-| Alta | El pagador elegía si el proveedor aprobaba su pago o su identidad | Cliente sin `scenario` ni `kyc`; el servidor resuelve el resultado local. Inyección explícita bloqueada por defecto con `LAB_DISABLED` |
+| Alta | El pagador elegía si el proveedor aprobaba su pago o su identidad | KYC se consulta en W1 con `W1_BASE_URL`; solo se envía un documento `TEST-*`, y una wallet activa nueva inicia con saldo cero |
 | Alta | Iniciar otro pago requería comprender claves y cerrar un intento terminal | Comprobante con acciones de volver o pagar de nuevo. La limpieza del formulario consulta primero el original; un pendiente no se descarta |
 | Media | Comprobantes y ayuda exponían asientos, códigos y vocabulario técnico | Motivos y solicitudes traducidos; ledger y trazas reservados visualmente a OPS; instrucciones distintas para pagador y comercio |
 | Media | La entrada principal era una vitrina de perfiles y mensajes promocionales | Acceso por alias y creación de cuenta como acciones principales; perfiles agrupados como evaluación; registro con datos, consentimiento y resumen |
@@ -126,7 +128,7 @@ Revisión del 23 de octubre de 2026 contra la épica y las seis historias de usu
 
 ### Trazabilidad funcional
 
-- W1: tres pasos persistidos, corrección de datos, consentimiento, resumen y activación instrumentada. Ya no se pide al usuario decidir su validación.
+- W1: tres pasos persistidos, corrección de datos, consentimiento, resumen y activación instrumentada. El resultado se consulta en W1 y el usuario no elige su validación.
 - W2: destinatario, importe, límite y saldo posterior antes de confirmar; resultado, referencia, comprobante y acciones posteriores claras.
 - W3: cobro QR con importe y vencimiento visibles; pendiente no autoriza entrega; actualización asíncrona y filtros por fecha/referencia conservados.
 - W4: clave interna conservada antes del envío, recuperación tras respuesta perdida y una sola afectación financiera. No se elimina para ocultar errores.

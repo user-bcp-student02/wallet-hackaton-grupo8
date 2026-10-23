@@ -15,9 +15,9 @@ Desde la carpeta del proyecto:
 .\scripts\start.ps1
 ```
 
-Abrir **http://127.0.0.1:8080**. Un único servidor Quarkus entrega Angular y la API; no necesitas Docker, bancos, claves API ni servicios externos.
+Abrir **http://127.0.0.1:8080**. Un único servidor Quarkus entrega Angular y la API. Para completar un registro, configura `W1_BASE_URL` con la URL asignada al grupo en el mock W1; las demás funciones locales no requieren bancos ni claves API.
 
-El build restaura las dependencias frontend si no existen, compila Angular en modo producción, ejecuta las pruebas del backend y empaqueta la aplicación. La primera ejecución necesita Internet para las dependencias. La aplicación compilada funciona sin Internet.
+El build restaura las dependencias frontend si no existen, compila Angular en modo producción, ejecuta las pruebas del backend y empaqueta la aplicación. La primera ejecución necesita Internet para las dependencias. La aplicación compilada puede usarse sin Internet salvo el registro KYC, que requiere el mock W1 configurado.
 
 Si `JAVA_HOME` apunta a un JDK antiguo, corrígelo antes de compilar. El script no modifica la instalación ni las variables permanentes del equipo.
 
@@ -32,7 +32,9 @@ Si `JAVA_HOME` apunta a un JDK antiguo, corrígelo antes de compilar. El script 
 
 La primera pantalla permite ingresar por alias o **Crear mi wallet**. Usa `ana.demo`, `luis.demo`, `cafe.demo` u `ops.demo` para evaluar cada rol; los accesos rápidos quedan dentro de **Cuentas de evaluación**. No hay contraseña porque la identidad sigue siendo simulada.
 
-El registro solicita datos ficticios, consentimiento y confirmación. El servidor aplica la respuesta del proveedor local (aprobada por defecto) y concede S/ 500 de prueba una sola vez. El usuario ya no elige resultados de identidad ni del pago. Después de pagar puede volver a su wallet o hacer otro pago; los pendientes conservan la reserva y las respuestas perdidas se recuperan sin duplicar cargos.
+El registro solicita identidad ficticia, consentimiento y confirmación. El servidor envía al mock W1 solo `documentType: TEST` y un documento aleatorio `TEST-*`; no transmite nombre, celular, PIN ni documentos reales. Una aprobación crea una wallet activa con saldo cero: el onboarding no acredita dinero. Si W1 requiere revisión manual, la cuenta permanece pendiente y se comunica el caso de soporte. Sin `W1_BASE_URL`, el alta falla explícitamente y no se sustituye por una aprobación local.
+
+Los perfiles de evaluación presembrados de la tabla conservan su saldo sintético de S/ 500 para probar pagos. Las nuevas wallets no reciben esos fondos.
 
 El laboratorio está **deshabilitado por defecto**. Solo para pruebas locales de fallas, iniciar con `$env:WALLET_LAB_ENABLED = 'true'`; permite escenarios explícitos en la API y habilita callbacks/fixtures de OPS. La UI de pagador nunca muestra un selector de escenarios. No habilitarlo en una exposición pública. Las pruebas automatizadas configuran su propio laboratorio aislado.
 
@@ -84,7 +86,7 @@ Detalle de invariantes, estados, alternativas y límites en [arquitectura](docs/
 
 Límites acordados para la demostración:
 
-- Saldo inicial al activarse: **S/ 500**.
+- Perfiles presembrados: **S/ 500**; wallet nueva aprobada por W1: **S/ 0**.
 - Pago por alias: **S/ 0.01 a S/ 200**.
 - Pago por QR: **S/ 0.01 a S/ 150**; validez del QR **15 minutos**.
 - Sesión local: **8 horas**. Cookie `HttpOnly`, `SameSite=Strict`; token almacenado como hash.

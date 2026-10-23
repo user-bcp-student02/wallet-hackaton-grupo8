@@ -17,6 +17,7 @@ import javax.imageio.ImageIO;
 @Consumes(MediaType.APPLICATION_JSON)
 public class WalletResource {
     @Inject Wallet wallet;
+    @Inject W1KycClient w1;
     @ConfigProperty(name = "wallet.lab.enabled", defaultValue = "false") boolean labEnabled;
     @CookieParam("wallet_session") String token;
     public record Login(String userId, String pin) {}
@@ -49,9 +50,44 @@ public class WalletResource {
     public Response start(Wallet.OnboardingStart input) { return session(wallet.start(input)); }
     @POST @Path("/onboarding/complete")
     public Object complete(Wallet.OnboardingComplete input) {
-        if (input.kyc() != null) laboratory();
-        return wallet.complete(token, new Wallet.OnboardingComplete(input.name(), input.alias(), input.phone(), input.consent(),
-            input.pin(), input.kyc() == null ? "APPROVED" : input.kyc()));
+        if (input == null) throw new ApiError(400, "BODY_REQUIRED", "Completa los datos ficticios requeridos.");
+        if (input.scenario() != null) laboratory();
+        wallet.validateOnboarding(token, input);
+        Set<String> previousCases = new HashSet<>();
+        if ("MANUAL_REVIEW".equals(input.scenario())) {
+            w1.getSupportCases().forEach(support -> previousCases.add(support.id()));
+        }
+        W1KycClient.Verification created = w1.createVerification("TEST-" + UUID.randomUUID(), input.scenario());
+        String expectedStatus = switch (created.scenario()) {
+            case "APPROVED" -> "ACTIVE";
+            case "MANUAL_REVIEW" -> "PENDING";
+            case "REJECTED" -> "REJECTED";
+            default -> throw new ApiError(502, "W1_CONTRACT_ERROR", "W1 devolvió un escenario incompatible.");
+        };
+        if (!expectedStatus.equals(created.status())) {
+            throw new ApiError(502, "W1_CONTRACT_ERROR", "El resultado KYC no coincide con el escenario publicado por W1.");
+        }
+        W1KycClient.WalletSnapshot externalWallet = w1.getWallet(created.walletId());
+        if (!created.walletId().equals(externalWallet.id()) || !expectedStatus.equals(externalWallet.status())
+                || externalWallet.balance() == null || externalWallet.balance() != 0L
+                || externalWallet.reserved() == null || externalWallet.reserved() != 0L
+                || externalWallet.available() == null || externalWallet.available() != 0L
+                || !"PEN".equals(externalWallet.currency())) {
+            throw new ApiError(502, "W1_CONTRACT_ERROR", "La wallet W1 no conserva el estado o saldo cero esperado.");
+        }
+        String supportCaseId = null;
+        if (created.scenario().equals("MANUAL_REVIEW")) {
+            List<String> newCases = w1.getSupportCases().stream()
+                    .filter(support -> !previousCases.contains(support.id()))
+                    .filter(support -> support.status().equals("OPEN"))
+                    .map(W1KycClient.SupportCase::id).toList();
+            if (newCases.size() != 1) {
+                throw new ApiError(502, "W1_SUPPORT_CASE_MISSING",
+                        "W1 no devolvió exactamente un caso de soporte nuevo para la revisión manual.");
+            }
+            supportCaseId = newCases.getFirst();
+        }
+        return wallet.complete(token, input, created, externalWallet, supportCaseId);
     }
     @POST @Path("/onboarding/step")
     public Object step(Wallet.OnboardingStep input) { return wallet.onboardingStep(token, input); }
@@ -126,7 +162,18 @@ public class WalletResource {
     @GET @Path("/ops/onboarding")
     public Object queue() { return wallet.onboardingQueue(token); }
     @POST @Path("/ops/onboarding/{id}")
-    public Object review(@PathParam("id") String id, KycDecision input) { return wallet.reviewKyc(token, id, input.decision()); }
+    public Object review(@PathParam("id") String id, KycDecision input) {
+        Map<String, Object> link = wallet.kycLink(token, id);
+        String verificationId = Wallet.text(link.get("verification_id"));
+        W1KycClient.Verification decision = w1.decide(verificationId, input.decision());
+        W1KycClient.Verification verification = w1.getVerification(verificationId);
+        W1KycClient.WalletSnapshot externalWallet = w1.getWallet(Wallet.text(link.get("wallet_id")));
+        if (!decision.id().equals(verification.id()) || !decision.walletId().equals(verification.walletId())
+                || !decision.scenario().equals(verification.scenario())) {
+            throw new ApiError(502, "W1_CONTRACT_ERROR", "La decisión W1 no coincide con la verificación consultada.");
+        }
+        return wallet.reviewKyc(token, id, verification, externalWallet);
+    }
     @POST @Path("/ops/reconciliation")
     public Object reconciliation(Wallet.ReconcileInput input) { return wallet.reconcile(token, input.date(), input.channel()); }
     @POST @Path("/ops/mismatches/{id}/investigate")

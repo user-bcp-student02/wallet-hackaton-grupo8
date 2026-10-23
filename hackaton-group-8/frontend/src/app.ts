@@ -231,10 +231,14 @@ export class App implements OnInit, OnDestroy {
     if (!/^[0-9]{6}$/.test(this.pin)) { this.error.set('Crea una clave de exactamente 6 dígitos.'); return; }
     if (this.pin !== this.confirmPin) { this.error.set('Las claves no coinciden.'); return; }
     await this.run(async () => {
-      this.user.set(await api<User>('/onboarding/complete', {name: this.name, alias: this.alias, phone: this.phone, consent: this.consent, pin: this.pin}));
+      this.user.set(await api<User>('/onboarding/complete', {name: this.name, alias: this.alias, phone: this.phone, consent: this.consent, pin: this.pin}, {}, 60000));
       this.pin = ''; this.confirmPin = '';
       this.registering.set(false); this.view.set('home'); await this.loadData();
-      this.notice.set(this.user()?.status === 'ACTIVE' ? 'Tu wallet está lista. Tienes S/ 500 de saldo de prueba para empezar.' : 'Estamos revisando tu cuenta. Puedes consultar el estado aquí.');
+      this.notice.set(this.user()?.status === 'ACTIVE'
+        ? 'Tu wallet está activa. El onboarding no deposita fondos.'
+        : this.user()?.status === 'PENDING'
+          ? 'Tu registro requiere una decisión de KYC. No puedes pagar mientras esté pendiente.'
+          : 'La verificación rechazó el registro. Esta wallet no puede realizar pagos.');
     });
   }
   navigate(view: View): void { this.view.set(view); this.error.set(''); this.notice.set(''); }
@@ -426,7 +430,7 @@ export class App implements OnInit, OnDestroy {
     });
   }
   async reviewKyc(id: string, decision: string): Promise<void> {
-    await this.run(async () => { await api(`/ops/onboarding/${id}`, {decision}); await this.loadData(); this.notice.set('Revisión KYC mock registrada.'); });
+    await this.run(async () => { await api(`/ops/onboarding/${id}`, {decision}, {}, 60000); await this.loadData(); this.notice.set('Decisión KYC W1 registrada.'); });
   }
   async loadMetrics(): Promise<void> {
     await this.run(async () => { this.metrics.set(await api<Metrics>(`/ops/metrics?launchMonth=${this.month}`)); this.view.set('metrics'); });

@@ -16,10 +16,12 @@ Toda mutación usa `Content-Type: application/json`, un objeto JSON y `X-Wallet-
 | POST | `/profile/pin` | `{"pin":"123456"}`; configura una sola vez la clave de una cuenta anterior autenticada |
 | POST | `/onboarding/start` | `{"campaign":"organico"}`; cuenta pendiente + sesión |
 | POST | `/onboarding/step` | Paso `identity` con `name`, `alias`, `phone`, `consent:false`; luego paso `consent` con `consent:true` |
-| POST | `/onboarding/complete` | `name`, `alias`, `phone`, `consent:true`, `pin` de seis dígitos; resultado de identidad resuelto por el servidor |
+| POST | `/onboarding/complete` | `name`, `alias`, `phone`, `consent:true`, `pin` de seis dígitos; inicia la verificación W1 usando solo un documento aleatorio `TEST-*` |
 | GET | `/contacts?q=<texto>` | Destinos activos no OPS, distintos de la propia cuenta; búsqueda parcial sin distinguir mayúsculas por nombre o alias. Sin `q`, devuelve hasta 100 |
 
-Identidad: nombre ficticio de 3–80 caracteres; alias `[a-z][a-z0-9.]{2,29}`; celular ficticio `9[0-9]{8}`. La clave debe contener exactamente seis dígitos; se almacena como hash PBKDF2 con sal y cinco intentos fallidos bloquean el acceso durante 15 minutos. Las cuentas preexistentes sin clave requieren configurarla antes de usar la wallet. Alias y celular son únicos. Una cuenta pendiente/rechazada no puede pagar.
+Identidad: nombre ficticio de 3–80 caracteres; alias `[a-z][a-z0-9.]{2,29}`; celular ficticio `9[0-9]{8}`. La clave debe contener exactamente seis dígitos; se almacena como hash PBKDF2 con sal y cinco intentos fallidos bloquean el acceso durante 15 minutos. Las cuentas preexistentes sin clave requieren configurarla antes de usar la wallet. Alias y celular son únicos. El formulario no acepta documentos personales: el backend envía a W1 solo `documentType: TEST` y un identificador ficticio `TEST-*`. La wallet aprobada queda activa con saldo cero; una wallet pendiente o rechazada no puede pagar, y una rechazada devuelve `409 WALLET_REJECTED`.
+
+`W1_BASE_URL` debe apuntar al mock W1 asignado al grupo. Si falta, el alta devuelve `503 W1_NOT_CONFIGURED`; no se aprueba localmente como alternativa. `MANUAL_REVIEW` consulta `GET /support/cases`, conserva la cuenta `PENDING` y muestra el identificador del caso asociado. `UNAVAILABLE` propaga `503 KYC_UNAVAILABLE` sin crear la wallet ni completar el registro. Una falla de transporte deja el resultado externo sin confirmar; no se informa como aprobación o rechazo.
 
 ## Checkout, pagos y QR
 
@@ -44,7 +46,7 @@ Ejemplo de pago:
 }
 ```
 
-Los clientes omiten `scenario` y `kyc`. El adaptador local responde `APPROVED` por defecto; no es una consulta a un proveedor real. Solo con `WALLET_LAB_ENABLED=true` se aceptan los campos opcionales de laboratorio `scenario` (`APPROVED`, `DECLINED`, `PENDING`, `TIMEOUT`) y `kyc` (`APPROVED`, `PENDING`, `DECLINED`). Fuera del laboratorio, enviarlos devuelve `403 LAB_DISABLED`. Las rutas OPS de callback y fixture también requieren laboratorio habilitado, además de su autorización por rol.
+Los clientes de pagos omiten `scenario`; el proveedor de pagos local responde `APPROVED` por defecto. Solo con `WALLET_LAB_ENABLED=true` se aceptan los campos opcionales de laboratorio de pago (`APPROVED`, `DECLINED`, `PENDING`, `TIMEOUT`). Fuera del laboratorio, enviarlos devuelve `403 LAB_DISABLED`. Para caracterizar KYC, el campo opcional de laboratorio `scenario` de `/onboarding/complete` admite `APPROVED`, `MANUAL_REVIEW`, `REJECTED` y `UNAVAILABLE`; la UI de usuarios no lo expone. Las rutas OPS de callback y fixture también requieren laboratorio habilitado, además de su autorización por rol.
 
 Resultados del proveedor local:
 
@@ -67,7 +69,7 @@ La respuesta incluye `id`, `payer_id`, `destination_id`, nombres, `amount`, `cha
 | GET | `/ops/cases` | OPS; últimos 200 casos |
 | POST | `/ops/cases/{id}` | OPS; `{"decision":"APPROVE_REVERSAL\|REJECT\|RESOLVE","note":"decisión humana"}` |
 | GET | `/ops/onboarding` | OPS; cuentas cuyo KYC mock está pendiente |
-| POST | `/ops/onboarding/{id}` | OPS; `{"decision":"APPROVED\|DECLINED"}` |
+| POST | `/ops/onboarding/{id}` | OPS; `{"decision":"ACTIVE\|REJECTED"}`; aplica la decisión W1 sobre una verificación `PENDING`; repetirla conserva el resultado y cambiar una decisión final devuelve `409 DECISION_CONFLICT` |
 | POST | `/ops/payments/{id}/callback` | OPS; `{"eventId":"<uuid>","outcome":"APPROVED\|DECLINED\|PENDING\|TIMEOUT"}` |
 | POST | `/ops/payments/{id}/fixture` | OPS; `{"outcome":"DECLINED","amount":1200,"missing":false}` o `{"missing":true}` |
 | POST | `/ops/reconciliation` | OPS; `{"date":"2026-10-23","channel":"ALIAS"}`; canal `""` o ausente para ambos |
