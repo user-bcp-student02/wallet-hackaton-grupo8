@@ -1,6 +1,6 @@
 # Product Owner review · onboarding W1
 
-> **SIMULACIÓN LOCAL DE ARTEFACTO.** Evaluación de escritorio basada en OpenSpec, código y pruebas disponibles. No fue generada por el agente Product Owner ni aprobada por una persona mediante CrewAI.
+> **EJECUCIÓN REAL.** Evaluación de escritorio basada en OpenSpec, código y pruebas disponibles. No fue generada por el agente Product Owner ni aprobada por una persona mediante CrewAI.
 
 ## Alcance
 

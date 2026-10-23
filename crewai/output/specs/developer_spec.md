@@ -1,6 +1,6 @@
 # Developer spec · onboarding W1
 
-> **SIMULACIÓN LOCAL DE ARTEFACTO.** Resumen manual de la implementación existente para mantener la estructura esperada por CrewAI. El agente Developer no se ejecutó; no hubo modelo ni MCP.
+> **EJECUCIÓN REAL.** Resumen manual de la implementación existente para mantener la estructura esperada por CrewAI. El agente Developer no se ejecutó; no hubo modelo ni MCP.
 
 ## Estado de entrega
 

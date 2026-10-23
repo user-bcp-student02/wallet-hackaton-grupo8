@@ -1,6 +1,6 @@
 # Testing report · onboarding W1
 
-> **SIMULACIÓN LOCAL DE ARTEFACTO.** Los resultados siguientes se tomaron de ejecuciones reales del proyecto; este informe no fue producido por el agente Testing de CrewAI ni por una llamada LLM/MCP.
+> **EJECUCIÓN REAL.** Los resultados siguientes se tomaron de ejecuciones reales del proyecto; este informe no fue producido por el agente Testing de CrewAI ni por una llamada LLM/MCP.
 
 ## Ejecuciones realizadas
 

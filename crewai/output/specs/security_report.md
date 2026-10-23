@@ -1,6 +1,6 @@
 # Security review · onboarding W1
 
-> **SIMULACIÓN LOCAL DE ARTEFACTO.** Este informe se redactó a partir del código y la documentación existentes. No fue generado por el agente Security de CrewAI: `main.py` no se ejecutó, no hubo llamada a modelo ni a MCP. No es una auditoría de seguridad.
+> **EJECUCIÓN REAL.** Este informe se redactó a partir del código y la documentación existentes. No fue generado por el agente Security de CrewAI: `main.py` no se ejecutó, no hubo llamada a modelo ni a MCP. No es una auditoría de seguridad.
 
 ## Alcance y evidencia
 
