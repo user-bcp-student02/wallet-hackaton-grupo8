@@ -1,5 +1,19 @@
 {
   "servers": {
+    "playwright": {
+      "type": "stdio",
+      "command": "npx",
+      "args": [
+        "@playwright/mcp@latest"
+      ]
+    },
+    "karate": {
+      "type": "stdio",
+      "command": "node",
+      "args": [
+        "C:\\Users\\Usuario\\Documents\\T56628-junior-cabrera\\karate-mcp-server\\dist\\index.js"
+      ]
+    },
     "github-official": {
       "type": "http",
       "url": "https://api.githubcopilot.com/mcp/",
